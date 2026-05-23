@@ -13,14 +13,16 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # لجلب كامل تاريخ التغييرات تفادياً لمشاكل الـ Git Pull
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Install dependencies
-      run: npm install
+    - name: Install Playwright Library
+      run: npm install playwright
 
     - name: Install Playwright Browsers
       run: npx playwright install chromium --with-deps
@@ -33,11 +35,16 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # التحقق مما إذا كان هناك تغيير في ملف result.json لمنع الخطأ إذا لم يتغير شيء
-        if [ -n "$(git status --porcelain result.json)" ]; then
+        # التأكد من وجود ملف النتيجة وجودة التعديلات
+        if [ -f result.json ] && [ -n "$(git status --porcelain result.json)" ]; then
           git add result.json
           git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed"
-          git push
+          
+          # جلب التحديثات ودمجها تلقائياً لتفادي مشكلة الـ rejected
+          git pull origin main --rebase
+          
+          # رفع الملف المستخرج بنجاح
+          git push origin main
         else
           echo "لا توجد تغييرات جديدة لحفظها."
         fi
