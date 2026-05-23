@@ -4,10 +4,7 @@ on:
   push:
     branches:
       - main
-  schedule:
-    # للتشغيل التلقائي (مثلاً كل يوم الساعة 12 ظهراً بتوقيت جرينتش) يمكنك تفعيل هذا السطر:
-    # - cron: '0 12 * * *'
-  workflow_dispatch: # يتيح لك تشغيل المشروع يدوياً من موقع جيت هاب نفسه
+  workflow_dispatch: # يتيح لك زر التشغيل اليدوي من موقع جيت هاب
 
 jobs:
   scrape:
@@ -35,7 +32,14 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add result.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed" && git push)
+        
+        # التحقق مما إذا كان هناك تغيير في ملف result.json لمنع الخطأ إذا لم يتغير شيء
+        if [ -n "$(git status --porcelain result.json)" ]; then
+          git add result.json
+          git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed"
+          git push
+        else
+          echo "لا توجد تغييرات جديدة لحفظها."
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
