@@ -1,6 +1,20 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
+// دالة بسيطة للتحقق من تشابه النصوص (عدد الكلمات المشتركة)
+function checkSimilarity(title1, title2) {
+    const words1 = title1.toLowerCase().replace(/[^\u0621-\u064A0-9a-zA-Z\s]/g, '').split(/\s+/);
+    const words2 = title2.toLowerCase().replace(/[^\u0621-\u064A0-9a-zA-Z\s]/g, '').split(/\s+/);
+    
+    let matches = 0;
+    words1.forEach(word => {
+        if (word.length > 2 && words2.includes(word)) {
+            matches++;
+        }
+    });
+    return matches;
+}
+
 async function startScraping() {
     console.log("جاري تشغيل المتصفح...");
     const browser = await chromium.launch({ headless: true });
@@ -10,153 +24,80 @@ async function startScraping() {
     const page = await context.newPage();
 
     try {
+        // ---- الخطوة 1: جلب اسم الفيلم من موقع ReelShort ----
         const reelShortUrl = "https://www.reelshort.com/ar/shelf/%D9%85%D8%AF%D8%A8%D9%84%D8%AC-short-movies-dramas-118859";
-        console.log(`جاري الانتقال إلى: ${reelShortUrl}`);
+        console.log(`جاري الانتقال إلى موقع ReelShort: ${reelShortUrl}`);
         
-        await page.goto(reelShortUrl, { waitUntil: 'networkidle', timeout: 30000 });
+        await page.goto(reelShortUrl, { waitUntil: 'networkidle' });
         
-        // انتظار تحميل العناصر
+        // انتظام تحميل عناصر الأفلام بناءً على الكود الذي أرفقته
         await page.waitForSelector('h2.line-clamp-2 a', { timeout: 15000 });
-        await page.waitForTimeout(3000); // انتظار إضافي للتأكد من تحميل كل شيء
 
-        // استخراج التفاصيل
+        // استخراج تفاصيل أول فيلم
         const movieDetails = await page.evaluate(() => {
-            // البحث عن الكارد الأول
-            const movieCard = document.querySelector('.flex.overflow-hidden');
-            if (!movieCard) {
-                console.log('لم يتم العثور على كارد الفيلم');
-                return null;
-            }
-
-            // استخراج العنوان
-            const titleElement = movieCard.querySelector('h2.line-clamp-2 a');
-            const title = titleElement ? titleElement.textContent.trim() : '';
-            const reelshortUrl = titleElement ? "https://www.reelshort.com" + titleElement.getAttribute('href') : '';
-
-            // استخراج الصورة - البحث عن img داخل الـ span
-            const imgElement = movieCard.querySelector('img[alt]');
-            let imageUrl = '';
-            let imageAlt = '';
-            if (imgElement) {
-                imageAlt = imgElement.getAttribute('alt') || '';
-                // محاولة استخراج src أولاً
-                imageUrl = imgElement.getAttribute('src') || '';
-                // إذا لم يكن هناك src، جرب srcset
-                if (!imageUrl || imageUrl.startsWith('data:image')) {
-                    const srcset = imgElement.getAttribute('srcset');
-                    if (srcset) {
-                        // خذ آخر رابط في srcset (الأعلى جودة)
-                        const srcsetParts = srcset.split(',');
-                        const lastPart = srcsetParts[srcsetParts.length - 1].trim();
-                        imageUrl = lastPart.split(' ')[0];
-                    }
-                }
-            }
-
-            // استخراج الوصف
-            const descriptionElement = movieCard.querySelector('.rich-text.inner-html-clamp');
-            const description = descriptionElement ? descriptionElement.textContent.trim() : '';
-
-            // استخراج المشاهدات والإعجابات
-            let views = '';
-            let likes = '';
+            const firstMovieLink = document.querySelector('h2.line-clamp-2 a');
+            if (!firstMovieLink) return null;
             
-            // البحث عن كل عناصر الإحصائيات
-            const statElements = movieCard.querySelectorAll('.flex.items-center');
-            
-            statElements.forEach(el => {
-                const text = el.textContent.trim();
-                // المشاهدات عادة تحتوي على M (مليون)
-                if (text.includes('M') && !views) {
-                    views = text;
-                }
-                // الإعجابات أيضاً تحتوي على M
-                else if (text.includes('M') && views) {
-                    likes = text;
-                }
-            });
-
-            // إذا لم نجد بالطريقة الأولى، نجرب البحث المباشر
-            if (!views) {
-                const allStats = movieCard.querySelectorAll('.flex.text-white\\/50 .flex.items-center');
-                if (allStats.length >= 2) {
-                    views = allStats[0].textContent.trim();
-                    likes = allStats[1].textContent.trim();
-                }
-            }
-
             return {
-                title: title,
-                reelshortUrl: reelshortUrl,
-                image: {
-                    url: imageUrl,
-                    alt: imageAlt
-                },
-                description: description,
-                views: views,
-                likes: likes
+                title: firstMovieLink.textContent.trim(),
+                reelshortUrl: "https://www.reelshort.com" + firstMovieLink.getAttribute('href')
             };
         });
 
-        if (!movieDetails || !movieDetails.title) {
-            console.log("لم يتم العثور على بيانات الفيلم. جاري محاولة طريقة بديلة...");
-            
-            // طريقة بديلة: طباعة HTML للتحقق
-            const htmlSample = await page.evaluate(() => {
-                const card = document.querySelector('.flex.overflow-hidden');
-                return card ? card.outerHTML.substring(0, 1000) : 'لم يتم العثور على الكارد';
-            });
-            console.log("عينة HTML:", htmlSample);
-            
-            // تجربة استخراج مباشر
-            const directData = await page.evaluate(() => {
-                const title = document.querySelector('h2.line-clamp-2 a')?.textContent.trim() || '';
-                const img = document.querySelector('img[alt]');
-                const imgSrc = img ? (img.getAttribute('src') || img.getAttribute('srcset')?.split(',').pop()?.trim()?.split(' ')[0]) : '';
-                const desc = document.querySelector('.rich-text')?.textContent.trim() || '';
-                
-                return { title, imgSrc, desc };
-            });
-            
-            console.log("بيانات مباشرة:", directData);
+        if (!movieDetails) {
+            console.log("لم يتم العثور على أي أفلام في الصفحة.");
+            await browser.close();
+            return;
         }
 
-        console.log("البيانات المستخرجة:", JSON.stringify(movieDetails, null, 2));
+        console.log(`تم استخراج الفيلم بنجاح: "${movieDetails.title}"`);
 
-        // البحث في Dailymotion
-        if (movieDetails && movieDetails.title) {
-            const searchTitle = movieDetails.title.replace(/\[\s*مدبلج\s*\]/g, '').trim();
-            const dailymotionSearchUrl = `https://www.dailymotion.com/search/${encodeURIComponent(searchTitle)}/videos`;
+        // ---- الخطوة 2: البحث في موقع Dailymotion ----
+        // تنظيف الاسم من الإضافات مثل [ مدبلج ] للبحث بشكل أفضل
+        const searchTitle = movieDetails.title.replace(/\[\s*مدبلج\s*\]/g, '').trim();
+        const dailymotionSearchUrl = `https://www.dailymotion.com/search/${encodeURIComponent(searchTitle)}/videos`;
+        
+        console.log(`جاري البحث في Dailymotion عن: "${searchTitle}"`);
+        await page.goto(dailymotionSearchUrl, { waitUntil: 'networkidle' });
+
+        // الانتظار حتى تظهر نتائج البحث
+        await page.waitForSelector('a[href^="/video/"]', { timeout: 15000 }).catch(() => null);
+
+        // استخراج الفيديوهات ومطابقتها
+        const embedUrl = await page.evaluate((originalTitle) => {
+            const videoLinks = Array.from(document.querySelectorAll('a[href^="/video/"]'));
             
-            console.log(`جاري البحث في Dailymotion: ${searchTitle}`);
-            await page.goto(dailymotionSearchUrl, { waitUntil: 'networkidle', timeout: 30000 });
-            await page.waitForTimeout(3000);
+            for (let link of videoLinks) {
+                const titleElement = link.querySelector('h2, span, xmp'); // حسب الهيكل الحالي لدايلي موشن
+                const videoTitle = titleElement ? titleElement.textContent.trim() : link.getAttribute('title') || "";
+                const href = link.getAttribute('href');
 
-            const embedUrl = await page.evaluate(() => {
-                const videoLink = document.querySelector('a[href^="/video/"]');
-                if (videoLink) {
-                    const href = videoLink.getAttribute('href');
+                if (href) {
+                    // استخراج الـ ID الخاص بالفيديو (مثال: /video/x8q1abc -> x8q1abc)
                     const videoId = href.split('/video/')[1]?.split('?')[0];
-                    return videoId ? `https://www.dailymotion.com/embed/video/${videoId}` : null;
+                    
+                    if (videoId) {
+                        return `https://www.dailymotion.com/embed/video/${videoId}`;
+                    }
                 }
-                return null;
-            });
+            }
+            return null;
+        }, movieDetails.title);
 
-            movieDetails.dailymotionEmbedUrl = embedUrl || "لم يتم العثور على رابط";
-            console.log("رابط Dailymotion:", movieDetails.dailymotionEmbedUrl);
+        if (embedUrl) {
+            movieDetails.dailymotionEmbedUrl = embedUrl;
+            console.log(`تم العثور على رابط الـ Embed: ${embedUrl}`);
+        } else {
+            movieDetails.dailymotionEmbedUrl = "لم يتم العثور على رابط مطابق";
+            console.log("تعذر العثور على فيديو مطابق في Dailymotion.");
         }
 
-        // حفظ النتائج
+        // ---- الخطوة 3: حفظ النتائج في ملف JSON ----
         fs.writeFileSync('result.json', JSON.stringify(movieDetails, null, 2), 'utf-8');
-        console.log("✓ تم حفظ النتائج في result.json");
+        console.log("تم حفظ النتائج في الملف result.json بنجاح.");
 
     } catch (error) {
-        console.error("خطأ:", error.message);
-        // حفظ الخطأ في الملف أيضاً للتصحيح
-        fs.writeFileSync('result.json', JSON.stringify({
-            error: error.message,
-            timestamp: new Date().toISOString()
-        }, null, 2));
+        console.error("حدث خطأ أثناء العمل:", error);
     } finally {
         await browser.close();
     }
