@@ -4,10 +4,7 @@ on:
   push:
     branches:
       - main
-  schedule:
-    # للتشغيل التلقائي (مثلاً كل يوم الساعة 12 ظهراً بتوقيت جرينتش) يمكنك تفعيل هذا السطر:
-    # - cron: '0 12 * * *'
-  workflow_dispatch: # يتيح لك تشغيل المشروع يدوياً من موقع جيت هاب نفسه
+  workflow_dispatch: # يتيح لك زر التشغيل اليدوي من موقع جيت هاب
 
 jobs:
   scrape:
@@ -16,14 +13,16 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # لجلب كامل تاريخ التغييرات تفادياً لمشاكل الـ Git Pull
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
 
-    - name: Install dependencies
-      run: npm install
+    - name: Install Playwright Library
+      run: npm install playwright
 
     - name: Install Playwright Browsers
       run: npx playwright install chromium --with-deps
@@ -35,7 +34,19 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add result.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed" && git push)
+        
+        # التأكد من وجود ملف النتيجة وجودة التعديلات
+        if [ -f result.json ] && [ -n "$(git status --porcelain result.json)" ]; then
+          git add result.json
+          git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed"
+          
+          # جلب التحديثات ودمجها تلقائياً لتفادي مشكلة الـ rejected
+          git pull origin main --rebase
+          
+          # رفع الملف المستخرج بنجاح
+          git push origin main
+        else
+          echo "لا توجد تغييرات جديدة لحفظها."
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
