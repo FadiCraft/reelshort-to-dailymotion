@@ -1,20 +1,6 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-// دالة بسيطة للتحقق من تشابه النصوص (عدد الكلمات المشتركة)
-function checkSimilarity(title1, title2) {
-    const words1 = title1.toLowerCase().replace(/[^\u0621-\u064A0-9a-zA-Z\s]/g, '').split(/\s+/);
-    const words2 = title2.toLowerCase().replace(/[^\u0621-\u064A0-9a-zA-Z\s]/g, '').split(/\s+/);
-    
-    let matches = 0;
-    words1.forEach(word => {
-        if (word.length > 2 && words2.includes(word)) {
-            matches++;
-        }
-    });
-    return matches;
-}
-
 async function startScraping() {
     console.log("جاري تشغيل المتصفح...");
     const browser = await chromium.launch({ headless: true });
@@ -24,51 +10,81 @@ async function startScraping() {
     const page = await context.newPage();
 
     try {
-        // ---- الخطوة 1: جلب اسم الفيلم من موقع ReelShort ----
         const reelShortUrl = "https://www.reelshort.com/ar/shelf/%D9%85%D8%AF%D8%A8%D9%84%D8%AC-short-movies-dramas-118859";
-        console.log(`جاري الانتقال إلى موقع ReelShort: ${reelShortUrl}`);
+        console.log(`جاري الانتقال إلى: ${reelShortUrl}`);
         
-        await page.goto(reelShortUrl, { waitUntil: 'networkidle' });
+        await page.goto(reelShortUrl, { waitUntil: 'networkidle', timeout: 30000 });
         
-        // انتظار تحميل عناصر الأفلام
+        // انتظار تحميل العناصر
         await page.waitForSelector('h2.line-clamp-2 a', { timeout: 15000 });
+        await page.waitForTimeout(3000); // انتظار إضافي للتأكد من تحميل كل شيء
 
-        // استخراج تفاصيل أول فيلم شاملة الصورة والوصف والنجوم والإعجابات
+        // استخراج التفاصيل
         const movieDetails = await page.evaluate(() => {
-            // البحث عن أول عنصر فيلم في الصفحة
+            // البحث عن الكارد الأول
             const movieCard = document.querySelector('.flex.overflow-hidden');
-            if (!movieCard) return null;
-            
-            // استخراج العنوان والرابط
+            if (!movieCard) {
+                console.log('لم يتم العثور على كارد الفيلم');
+                return null;
+            }
+
+            // استخراج العنوان
             const titleElement = movieCard.querySelector('h2.line-clamp-2 a');
             const title = titleElement ? titleElement.textContent.trim() : '';
             const reelshortUrl = titleElement ? "https://www.reelshort.com" + titleElement.getAttribute('href') : '';
-            
-            // استخراج الصورة
+
+            // استخراج الصورة - البحث عن img داخل الـ span
             const imgElement = movieCard.querySelector('img[alt]');
-            const imageUrl = imgElement ? (imgElement.getAttribute('srcset')?.split(',')?.pop()?.trim()?.split(' ')[0] || imgElement.getAttribute('src')) : '';
-            const imageAlt = imgElement ? imgElement.getAttribute('alt') : '';
-            
+            let imageUrl = '';
+            let imageAlt = '';
+            if (imgElement) {
+                imageAlt = imgElement.getAttribute('alt') || '';
+                // محاولة استخراج src أولاً
+                imageUrl = imgElement.getAttribute('src') || '';
+                // إذا لم يكن هناك src، جرب srcset
+                if (!imageUrl || imageUrl.startsWith('data:image')) {
+                    const srcset = imgElement.getAttribute('srcset');
+                    if (srcset) {
+                        // خذ آخر رابط في srcset (الأعلى جودة)
+                        const srcsetParts = srcset.split(',');
+                        const lastPart = srcsetParts[srcsetParts.length - 1].trim();
+                        imageUrl = lastPart.split(' ')[0];
+                    }
+                }
+            }
+
             // استخراج الوصف
             const descriptionElement = movieCard.querySelector('.rich-text.inner-html-clamp');
             const description = descriptionElement ? descriptionElement.textContent.trim() : '';
-            
-            // استخراج عدد المشاهدات/النجوم (عادةً يكون مع أيقونة التشغيل)
-            const viewsElement = movieCard.querySelector('.flex.items-center.mr-24\\/vw, .flex.items-center.mr-24px');
-            const views = viewsElement ? viewsElement.textContent.trim() : '';
-            
-            // استخراج عدد الإعجابات (عادةً يكون مع أيقونة النجمة)
-            const likesElements = movieCard.querySelectorAll('.flex.items-center');
+
+            // استخراج المشاهدات والإعجابات
+            let views = '';
             let likes = '';
-            // نتخطى العنصر الأول إذا كان للمشاهدات ونأخذ الثاني
-            if (likesElements.length >= 2) {
-                likes = likesElements[1].textContent.trim();
+            
+            // البحث عن كل عناصر الإحصائيات
+            const statElements = movieCard.querySelectorAll('.flex.items-center');
+            
+            statElements.forEach(el => {
+                const text = el.textContent.trim();
+                // المشاهدات عادة تحتوي على M (مليون)
+                if (text.includes('M') && !views) {
+                    views = text;
+                }
+                // الإعجابات أيضاً تحتوي على M
+                else if (text.includes('M') && views) {
+                    likes = text;
+                }
+            });
+
+            // إذا لم نجد بالطريقة الأولى، نجرب البحث المباشر
+            if (!views) {
+                const allStats = movieCard.querySelectorAll('.flex.text-white\\/50 .flex.items-center');
+                if (allStats.length >= 2) {
+                    views = allStats[0].textContent.trim();
+                    likes = allStats[1].textContent.trim();
+                }
             }
-            
-            // تنظيف النصوص من المسافات الزائدة
-            const cleanViews = views.replace(/[\s\n]+/g, ' ').trim();
-            const cleanLikes = likes.replace(/[\s\n]+/g, ' ').trim();
-            
+
             return {
                 title: title,
                 reelshortUrl: reelshortUrl,
@@ -77,74 +93,70 @@ async function startScraping() {
                     alt: imageAlt
                 },
                 description: description,
-                views: cleanViews,
-                likes: cleanLikes
+                views: views,
+                likes: likes
             };
         });
 
-        if (!movieDetails) {
-            console.log("لم يتم العثور على أي أفلام في الصفحة.");
-            await browser.close();
-            return;
-        }
-
-        console.log("تم استخراج بيانات الفيلم بنجاح:");
-        console.log(`- العنوان: "${movieDetails.title}"`);
-        console.log(`- الصورة: ${movieDetails.image.url}`);
-        console.log(`- الوصف: ${movieDetails.description.substring(0, 100)}...`);
-        console.log(`- المشاهدات: ${movieDetails.views}`);
-        console.log(`- الإعجابات: ${movieDetails.likes}`);
-
-        // ---- الخطوة 2: البحث في موقع Dailymotion ----
-        const searchTitle = movieDetails.title.replace(/\[\s*مدبلج\s*\]/g, '').trim();
-        const dailymotionSearchUrl = `https://www.dailymotion.com/search/${encodeURIComponent(searchTitle)}/videos`;
-        
-        console.log(`جاري البحث في Dailymotion عن: "${searchTitle}"`);
-        await page.goto(dailymotionSearchUrl, { waitUntil: 'networkidle' });
-
-        await page.waitForSelector('a[href^="/video/"]', { timeout: 15000 }).catch(() => null);
-
-        const embedUrl = await page.evaluate((originalTitle) => {
-            const videoLinks = Array.from(document.querySelectorAll('a[href^="/video/"]'));
+        if (!movieDetails || !movieDetails.title) {
+            console.log("لم يتم العثور على بيانات الفيلم. جاري محاولة طريقة بديلة...");
             
-            for (let link of videoLinks) {
-                const titleElement = link.querySelector('h2, span, xmp');
-                const videoTitle = titleElement ? titleElement.textContent.trim() : link.getAttribute('title') || "";
-                const href = link.getAttribute('href');
-
-                if (href) {
-                    const videoId = href.split('/video/')[1]?.split('?')[0];
-                    
-                    if (videoId) {
-                        // التحقق من تطابق العنوان
-                        const similarity = (videoTitle.toLowerCase().includes(originalTitle.toLowerCase().substring(0, 10))) || 
-                                         (originalTitle.toLowerCase().includes(videoTitle.toLowerCase().substring(0, 10)));
-                        
-                        if (similarity || !videoTitle) {
-                            return `https://www.dailymotion.com/embed/video/${videoId}`;
-                        }
-                    }
-                }
-            }
-            return null;
-        }, movieDetails.title);
-
-        if (embedUrl) {
-            movieDetails.dailymotionEmbedUrl = embedUrl;
-            console.log(`تم العثور على رابط الـ Embed: ${embedUrl}`);
-        } else {
-            movieDetails.dailymotionEmbedUrl = "لم يتم العثور على رابط مطابق";
-            console.log("تعذر العثور على فيديو مطابق في Dailymotion.");
+            // طريقة بديلة: طباعة HTML للتحقق
+            const htmlSample = await page.evaluate(() => {
+                const card = document.querySelector('.flex.overflow-hidden');
+                return card ? card.outerHTML.substring(0, 1000) : 'لم يتم العثور على الكارد';
+            });
+            console.log("عينة HTML:", htmlSample);
+            
+            // تجربة استخراج مباشر
+            const directData = await page.evaluate(() => {
+                const title = document.querySelector('h2.line-clamp-2 a')?.textContent.trim() || '';
+                const img = document.querySelector('img[alt]');
+                const imgSrc = img ? (img.getAttribute('src') || img.getAttribute('srcset')?.split(',').pop()?.trim()?.split(' ')[0]) : '';
+                const desc = document.querySelector('.rich-text')?.textContent.trim() || '';
+                
+                return { title, imgSrc, desc };
+            });
+            
+            console.log("بيانات مباشرة:", directData);
         }
 
-        // ---- الخطوة 3: حفظ النتائج في ملف JSON ----
+        console.log("البيانات المستخرجة:", JSON.stringify(movieDetails, null, 2));
+
+        // البحث في Dailymotion
+        if (movieDetails && movieDetails.title) {
+            const searchTitle = movieDetails.title.replace(/\[\s*مدبلج\s*\]/g, '').trim();
+            const dailymotionSearchUrl = `https://www.dailymotion.com/search/${encodeURIComponent(searchTitle)}/videos`;
+            
+            console.log(`جاري البحث في Dailymotion: ${searchTitle}`);
+            await page.goto(dailymotionSearchUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            await page.waitForTimeout(3000);
+
+            const embedUrl = await page.evaluate(() => {
+                const videoLink = document.querySelector('a[href^="/video/"]');
+                if (videoLink) {
+                    const href = videoLink.getAttribute('href');
+                    const videoId = href.split('/video/')[1]?.split('?')[0];
+                    return videoId ? `https://www.dailymotion.com/embed/video/${videoId}` : null;
+                }
+                return null;
+            });
+
+            movieDetails.dailymotionEmbedUrl = embedUrl || "لم يتم العثور على رابط";
+            console.log("رابط Dailymotion:", movieDetails.dailymotionEmbedUrl);
+        }
+
+        // حفظ النتائج
         fs.writeFileSync('result.json', JSON.stringify(movieDetails, null, 2), 'utf-8');
-        console.log("تم حفظ النتائج في الملف result.json بنجاح.");
-        console.log("\n--- ملخص البيانات المستخرجة ---");
-        console.log(JSON.stringify(movieDetails, null, 2));
+        console.log("✓ تم حفظ النتائج في result.json");
 
     } catch (error) {
-        console.error("حدث خطأ أثناء العمل:", error);
+        console.error("خطأ:", error.message);
+        // حفظ الخطأ في الملف أيضاً للتصحيح
+        fs.writeFileSync('result.json', JSON.stringify({
+            error: error.message,
+            timestamp: new Date().toISOString()
+        }, null, 2));
     } finally {
         await browser.close();
     }
