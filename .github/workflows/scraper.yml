@@ -35,13 +35,22 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # التأكد من وجود ملف النتيجة وجودة التعديلات
+        # إضافة جميع الملفات التي قد تكون تغيرت (مثل package.json, package-lock.json)
+        git add -A
+        
+        # حفظ أي تغييرات إضافية مؤقتاً
+        git stash --include-untracked
+        
+        # جلب آخر التحديثات من الفرع الرئيسي
+        git pull origin main --rebase
+        
+        # استعادة التغييرات المحفوظة مؤقتاً
+        git stash pop || true
+        
+        # التأكد من وجود ملف النتيجة ووجود تغييرات فيه
         if [ -f result.json ] && [ -n "$(git status --porcelain result.json)" ]; then
           git add result.json
           git commit -m "تحديث تلقائي: جلب بيانات الفيلم وروابط الـ Embed"
-          
-          # جلب التحديثات ودمجها تلقائياً لتفادي مشكلة الـ rejected
-          git pull origin main --rebase
           
           # رفع الملف المستخرج بنجاح
           git push origin main
